@@ -1,3 +1,6 @@
+# Python 3.10–3.12 required (not 3.13/3.14). Create the venv with that interpreter:
+#   Windows: py -3.12 -m venv .venv
+#   Mac/Linux: python3.12 -m venv .venv
 numpy>=1.26,<3
 opencv-python>=4.8.0,<6
 torch>=2.2.0
