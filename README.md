@@ -144,7 +144,7 @@ for %f in (reference\*.png) do python localize.py --reference "%f" --search "sea
 
 ```bash
 python localize.py --reference dataset/reference/00000.png --search dataset/search/00000.png
-# Expected: ~844.38 285.63  (GT: 844.6, 285.6)
+
 ```
 
 RGB optical PNGs work with the same command — loaded as grayscale internally.
