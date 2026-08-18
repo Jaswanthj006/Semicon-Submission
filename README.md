@@ -104,13 +104,36 @@ If `verifier.pt` is missing, the pipeline falls back to ZNCC + sub-pixel and sti
 
 ## Clone & Install
 
+**Requirements**
+
+- **Python 3.10, 3.11, or 3.12** (not 3.13 or 3.14 — NumPy/OpenCV wheels break)
+- pip · Windows or Mac · GPU optional (CUDA / Apple MPS / CPU)
+
+If `python --version` shows **3.14**, do not use that interpreter even if 3.12 is also installed. Create the venv with 3.12 explicitly.
+
 ```bash
 git clone https://github.com/Jaswanthj006/Semicon-Submission.git
 cd Semicon-Submission
+```
+
+**Windows** (picks 3.12 when both 3.12 and 3.14 are installed):
+
+```bat
+py -0p
+py -3.12 -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Python 3.10+ · Windows / Mac · GPU optional (CUDA / MPS / CPU)
+**Mac / Linux:**
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+After activate, `python --version` should show 3.12.x (or 3.11 / 3.10). Then run `localize.py` with that venv.
 
 Weights ship in `model/verifier.pt` — no training needed.
 
