@@ -8,37 +8,97 @@
 
 ## Our Solution — Three Stages
 
-DRAM cells repeat every ~5–10 pixels at 10 nm/px. A global ZNCC max hits the **wrong cell** ~45% of the time — not off by 2 px, but by an entire period (100–600 px). The true window is usually among the top-20 peaks (~90% recall). So we propose many, then learn which one is real.
+The main challenge is that DRAM contains many repeated structures. When the reference patch is searched inside the larger search image, several different DRAM cells can look very similar.
 
-**Stage 1 — Propose (multi-scale ZNCC)**
+A simple template-matching method can therefore find a location that looks correct but actually belongs to another repeated cell. Our solution handles this in three steps:
 
-The exact scale ratio varies 9×–11× and the search can be rotated ±2°. We cannot assume a fixed downscale.
+**Find several possible locations → decide which one is correct → refine the final location.**
 
-- Resize the reference onto a **5-point scale grid** (9.0, 9.5, 10.0, 10.5, 11.0)
-- Rotate each resized template at **5 angles** (−2°, −1°, 0°, +1°, +2°) → 25 ZNCC maps
-- Extract local maxima (up to 8 per map), pool, sort by score
-- Non-maximum suppression (3 px radius), keep the **top 20** candidates
+### Stage 1 — Propose: Find the Most Likely Locations
 
-Result: 20 candidate locations. The true match is among them ~90% of the time.
+First, we use **ZNCC (Zero-Normalized Cross-Correlation)** to compare the reference patch with different parts of the search image.
 
-**Stage 2 — Rank (CNN verifier)**
+We do not assume that the search image is exactly 10× larger or perfectly aligned. The actual scale can vary slightly and the image can have a small rotation.
 
-The 20 candidates all look like valid matches to ZNCC. A small CNN tells the real one from the aliases.
+So we test:
 
-- For each candidate: crop 128×128 from search + matched template → **2-channel 128×128 input**
-- Plus **3 scalar features**: ZNCC score, scale ratio, rotation angle
-- CNN (~231k params, 4 conv blocks + 2-layer head) → one score per candidate → softmax
-- **Training trick:** hard negatives = the other ZNCC peaks from the same pair (the exact period aliases)
+- **5 scale values:** 9.0, 9.5, 10.0, 10.5, 11.0
+- **5 rotation values:** −2°, −1°, 0°, +1°, +2°
 
-This is not a full-image detector. It only ranks windows that Stage 1 already found.
+This gives **25 different matching searches**.
 
-**Stage 3 — Refine (tie-break + sub-pixel)**
+For each search, ZNCC produces a score at different locations. A high score means that the reference and that part of the search image look similar.
 
-- Among candidates within **0.05** of the top verifier score, pick closest to **(500, 500)**
-- Fit a **1D parabola** on the ZNCC map around the integer peak → sub-pixel offset
-- Final: `x = xi + dx + template_width/2`, `y = yi + dy + template_width/2`
+We then:
 
-Fallback: no weights → ZNCC score alone. No peaks at all → prints `500 500`.
+1. Find the strongest local peaks from all 25 searches.
+2. Combine the peaks into one list.
+3. Remove candidates that are too close to each other.
+4. Keep the **top 20 candidate locations**.
+
+Why not simply take the highest ZNCC score?
+
+Because DRAM is repetitive. The highest score can belong to a different but visually similar DRAM cell. Instead of making this decision immediately, we keep several strong candidates.
+
+**Result:** up to 20 possible locations are passed to Stage 2. The correct location is among these candidates about **90% of the time**.
+
+### Stage 2 — Rank: Decide Which Candidate Is the Real Match
+
+At this point, we have several locations that all look similar to the reference.
+
+This is where the **CNN verifier** is used.
+
+For every candidate, we take:
+
+- A **128×128 crop** around that candidate from the search image
+- The corresponding reference/template information
+- Three additional values:
+  - ZNCC score
+  - Scale ratio
+  - Rotation angle
+
+The image information is provided to the CNN as a **2-channel 128×128 input**, together with the three numerical features.
+
+The CNN then gives each candidate a score representing how likely it is to be the correct match.
+
+An important part of training is the use of **hard negatives**.
+
+Instead of using completely unrelated images as negative examples, we use the other high-scoring ZNCC candidates from the **same search image**.
+
+This is important because those candidates are exactly the difficult cases: they are usually other repeated DRAM cells that look almost identical to the correct one.
+
+So the CNN learns the actual problem we care about:
+
+> **Which of these visually similar DRAM cells is the one that produced the reference patch?**
+
+The CNN is therefore **not searching the entire image**. ZNCC has already done the search. The CNN only has to choose between the most promising candidates.
+
+### Stage 3 — Refine: Get the Final Coordinate
+
+After the CNN ranks the candidates, we select the best one.
+
+However, the problem specification also defines what to do when multiple locations are almost equally plausible.
+
+If several candidates have verifier scores within **0.05 of the best score**, we use the required tie-break rule:
+
+> Choose the candidate closest to the center of the search image, `(500, 500)`.
+
+Finally, we improve the coordinate beyond the integer pixel location.
+
+ZNCC initially gives us an integer peak such as:
+
+```text
+x = 844
+y = 286
+```
+
+We then fit a 1D parabola around that peak on the ZNCC map. That gives a small fractional offset, so the printed result can be:
+
+```text
+844.38 285.63
+```
+
+If `verifier.pt` is missing, the pipeline falls back to ZNCC + sub-pixel and still prints `x y`. If no ZNCC peaks are found at all, it prints `500 500`.
 
 ---
 
@@ -126,16 +186,20 @@ Per bucket (eval): easy **1.00** · scale_rot **1.00** · hard_geometry **0.80**
 
 ## Noise — What & Why
 
+The search image is intentionally varied to represent different acquisition conditions. These effects are used to test whether the matcher can still locate the same DRAM structure when the image quality or appearance changes.
+
 | Artifact | Why we add it | Citation |
 |---|---|---|
-| Poisson shot noise | Electron-dose statistics | Joy 1995 |
-| Detector Gaussian | SEM electronics noise | Timischl 2015 |
-| Raster shear + jitter | Scan drift | Jones & Nellist 2013 |
-| Charging streaks | Local insulator charging | Cazaux 2004 |
-| Salt-and-pepper | Dead/hot pixels | — |
-| Scale 9–11, rot ±2° | Real FOV is not exactly 10× / 0° | Problem statement |
+| Poisson shot noise | Represents variation caused by electron-dose statistics | Joy 1995 |
+| Detector Gaussian | Represents SEM electronics and detector noise | Timischl 2015 |
+| Raster shear + jitter | Represents scan drift during acquisition | Jones & Nellist 2013 |
+| Charging streaks | Represents local charging effects on the sample | Cazaux 2004 |
+| Salt-and-pepper | Represents isolated pixel-level defects | — |
+| Scale 9–11, rot ±2° | Tests small changes in effective scale and orientation | Problem statement |
 
-Speckle, barrel distortion, and vignette are deliberately **OFF** — they turn the search into a warped photo instead of a noisy, slightly scaled DRAM field.
+Speckle, barrel distortion, and vignette are deliberately **OFF**. They are not required for the intended acquisition model and would introduce additional image distortions that are outside the main problem we are trying to solve.
+
+The goal is to keep the underlying DRAM structure the same while changing how it appears in the search image.
 
 Full details: `references/CITATIONS.md`
 
@@ -143,9 +207,9 @@ Full details: `references/CITATIONS.md`
 
 ## Failure Mode & How We Addressed It
 
-**What fails:** wrong DRAM period — the matcher jumps to a look-alike cell one repeat over (error ~100–600 px).
+**What fails:** wrong DRAM period — the matcher can select a look-alike cell instead of the correct one, resulting in an error of ~100–600 px.
 
-**Why:** at 10 nm/px, DRAM repeats every ~5–10 px. Many cells produce near-identical ZNCC scores.
+**Why:** at 10 nm/px, DRAM contains repeated structures that can produce very similar ZNCC scores at different locations.
 
 **How we addressed it:**
 
