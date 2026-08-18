@@ -6,3 +6,5 @@ venv/
 .venv/
 *.egg-info/
 .DS_Store
+model/cands_*.npy
+__pycache__/
