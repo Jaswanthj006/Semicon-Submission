@@ -520,6 +520,13 @@ def localize_pair(ref, sea, model, device):
     t_prop = time.time() - t0
 
     t0 = time.time()
+    # No ZNCC peaks (flat/NaN maps): still print a coordinate. Spec tie-break
+    # is the search-image center when nothing else ranks.
+    if not cands:
+        return {"x": SEARCH_CENTER[0], "y": SEARCH_CENTER[1],
+                "conf": 0.0, "second": 0.0, "scale": 10.0, "angle": 0.0,
+                "box_w": 100.0, "cands": cands, "t_prop": t_prop,
+                "t_rank": time.time() - t0}
     if model is not None:
         crops = torch.from_numpy(np.stack(
             [candidate_patch(sea, c, maps) for c in cands]).astype(np.float32) / 255.0)
@@ -596,7 +603,8 @@ def stage3(args):
         gx, gy = float(row["gt_x"]), float(row["gt_y"])
         out = localize_pair(ref, sea, model, device)
         err = float(np.hypot(out["x"] - gx, out["y"] - gy))
-        best_cand = min(np.hypot(c["cx"] - gx, c["cy"] - gy) for c in out["cands"])
+        best_cand = min((np.hypot(c["cx"] - gx, c["cy"] - gy) for c in out["cands"]),
+                        default=float("inf"))
         results.append({
             "id": row.get("id", ""), "bucket": row.get("noise_bucket", "?"),
             "gt_x": gx, "gt_y": gy, "pred_x": out["x"], "pred_y": out["y"],

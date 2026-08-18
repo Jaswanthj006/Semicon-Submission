@@ -12,6 +12,10 @@ Noise recipe is ON by default (same mix used to train the matcher):
 
     python generate_dataset.py --num-samples 40 --split eval --output-dir ./dataset --seed 7
 
+RGB optical bonus (real 3-channel PNGs, does not touch gray dataset/):
+
+    python generate_dataset.py --num-samples 20 --split optical --output-dir ./dataset_optical --seed 99 --optical
+
 Dependencies: numpy, opencv-python (no torch).
 """
 
@@ -272,6 +276,122 @@ def generate_zone_canvas(size_px, kind, collapse_threshold_nm, rng,
 
 
 # =============================================================================
+# Optical RGB layout (bonus only; unused unless --optical)
+# BGR colors so word / bit / contact are different channels, not gray copies.
+# =============================================================================
+OPT_SUBSTRATE = (55, 45, 35)
+OPT_WORD_LINE = (40, 90, 180)
+OPT_BIT_LINE = (160, 140, 50)
+OPT_CONTACT = (240, 230, 220)
+OPT_FIN = (50, 160, 90)
+OPT_GATE = (180, 80, 40)
+OPT_STRIP_BASE = (90, 85, 70)
+OPT_STRIP_LINE = (120, 115, 100)
+
+
+def _fill_rgb(size_px, bgr):
+    canvas = np.empty((size_px, size_px, 3), dtype=np.uint8)
+    canvas[:] = bgr
+    return canvas
+
+
+def generate_dram_canvas_rgb(size_px, preset, collapse_threshold_nm, rng,
+                             linewidth_bias_nm=0.0, corner_rounding_px=0.0):
+    canvas = _fill_rgb(size_px, OPT_SUBSTRATE)
+    wl = _line_positions(size_px, preset["word_line_pitch_nm"], rng, 1.5)
+    bl = _line_positions(size_px, preset["bit_line_pitch_nm"], rng, 1.5)
+    row = _line_mask(size_px, wl, preset["word_line_width_nm"],
+                     collapse_threshold_nm, rng, linewidth_bias_nm)
+    col = _line_mask(size_px, bl, preset["bit_line_width_nm"],
+                     collapse_threshold_nm, rng, linewidth_bias_nm)
+    canvas[row, :] = OPT_WORD_LINE
+    canvas[:, col] = OPT_BIT_LINE
+    radius0 = max(preset["contact_diameter_nm"] + linewidth_bias_nm, 1.0) / 2.0
+    for i, y in enumerate(wl):
+        for j, x in enumerate(bl):
+            if (i + j) % 2 == 0:
+                r = max(1, int(round(radius0 * (1.0 + rng.normal(0, WIDTH_JITTER_FRACTION)))))
+                cv2.circle(canvas, (int(round(x)), int(round(y))), r, OPT_CONTACT, -1)
+    return _round_corners(canvas, corner_rounding_px)
+
+
+def generate_finfet_canvas_rgb(size_px, preset, collapse_threshold_nm, rng,
+                               linewidth_bias_nm=0.0, corner_rounding_px=0.0):
+    canvas = _fill_rgb(size_px, OPT_SUBSTRATE)
+    fins = _line_positions(size_px, preset["fin_pitch_nm"], rng, 1.0)
+    gates = _line_positions(size_px, preset["gate_pitch_nm"], rng, 1.0)
+    col = _line_mask(size_px, fins, preset["fin_width_nm"],
+                     collapse_threshold_nm, rng, linewidth_bias_nm)
+    row = _line_mask(size_px, gates, preset["gate_length_nm"],
+                     collapse_threshold_nm, rng, linewidth_bias_nm)
+    canvas[:, col] = OPT_FIN
+    canvas[row, :] = OPT_GATE
+    half = max(1, int(round(max(preset["contact_size_nm"] + linewidth_bias_nm, 1.0) / 2.0)))
+    for i, fx in enumerate(fins):
+        for j in range(len(gates) - 1):
+            if (i + j) % 2 == 0:
+                mid = (gates[j] + gates[j + 1]) / 2.0
+                x, y = int(round(fx)), int(round(mid))
+                p0 = (max(x - half, 0), max(y - half, 0))
+                p1 = (min(x + half, size_px - 1), min(y + half, size_px - 1))
+                cv2.rectangle(canvas, p0, p1, OPT_CONTACT, -1)
+    return _round_corners(canvas, corner_rounding_px)
+
+
+def _strip_routing_texture_rgb(size_px, rng):
+    canvas = _fill_rgb(size_px, OPT_STRIP_BASE)
+    half = STRIP_LINE_WIDTH_NM / 2.0
+    for positions, is_row in (
+        (np.arange(rng.uniform(0, STRIP_LINE_PITCH_NM), size_px, STRIP_LINE_PITCH_NM), True),
+        (np.arange(rng.uniform(0, STRIP_LINE_PITCH_NM), size_px, STRIP_LINE_PITCH_NM), False),
+    ):
+        for center in positions:
+            lo = max(int(round(center - half)), 0)
+            hi = min(int(round(center + half)), size_px)
+            if is_row:
+                canvas[lo:hi, :] = OPT_STRIP_LINE
+            else:
+                canvas[:, lo:hi] = OPT_STRIP_LINE
+    return canvas
+
+
+_GENERATORS_RGB = {"dram": generate_dram_canvas_rgb, "finfet": generate_finfet_canvas_rgb}
+
+
+def generate_zone_canvas_rgb(size_px, kind, collapse_threshold_nm, rng,
+                             mat_size_nm=2600.0, strip_width_nm=320.0,
+                             linewidth_bias_nm=0.0, corner_rounding_px=0.0):
+    generator = _GENERATORS_RGB[kind]
+    presets = presets_for_kind(kind)
+    canvas = _strip_routing_texture_rgb(size_px, rng)
+    mat_rects, strip_rects = [], []
+    for row_is_mat, y0, y1 in _zone_grid(size_px, mat_size_nm, strip_width_nm):
+        for col_is_mat, x0, x1 in _zone_grid(size_px, mat_size_nm, strip_width_nm):
+            if row_is_mat and col_is_mat and y1 > y0 and x1 > x0:
+                h, w = y1 - y0, x1 - x0
+                preset = presets[int(rng.integers(0, len(presets)))]
+                child = np.random.default_rng(rng.integers(0, 2**31 - 1))
+                side = max(h, w)
+                mat = generator(side, preset, collapse_threshold_nm, child,
+                                linewidth_bias_nm=linewidth_bias_nm,
+                                corner_rounding_px=corner_rounding_px)
+                canvas[y0:y1, x0:x1] = mat[:h, :w]
+                mat_rects.append((x0, y0, w, h))
+            else:
+                strip_rects.append((x0, y0, x1 - x0, y1 - y0))
+    return {"canvas": canvas, "mat_rects": mat_rects, "strip_rects": strip_rects}
+
+
+def add_optical_channel_noise(img, rng, sigma_bgr=(6.0, 5.0, 7.0)):
+    """Independent CMOS noise on B, G, R. Gray SEM path never calls this."""
+    out = img.astype(np.float64)
+    noise = np.empty_like(out)
+    for c, sig in enumerate(sigma_bgr):
+        noise[..., c] = rng.normal(0, sig, size=out.shape[:2])
+    return np.clip(out + noise, 0, 255).astype(np.uint8)
+
+
+# =============================================================================
 # SEM imaging artifacts
 # =============================================================================
 def gaussian_psf_blur(img, spot_size_nm, pixel_size_nm, astigmatism_ratio=1.0):
@@ -289,7 +409,10 @@ def apply_vignette(img, strength):
     cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
     r = np.sqrt(((yy - cy) / cy) ** 2 + ((xx - cx) / cx) ** 2)
     r = np.clip(r / np.sqrt(2), 0, 1)
-    return np.clip(img.astype(np.float64) * (1.0 - strength * (r ** 2)), 0, 255).astype(np.uint8)
+    factor = 1.0 - strength * (r ** 2)
+    if img.ndim == 3:
+        factor = factor[..., None]
+    return np.clip(img.astype(np.float64) * factor, 0, 255).astype(np.uint8)
 
 
 def apply_gamma(img, gamma):
@@ -530,6 +653,65 @@ def generate_sample(architecture, rng, params: GenerationParams) -> dict:
     }
 
 
+def generate_sample_optical(architecture, rng, params: GenerationParams) -> dict:
+    """Same geometry/GT as generate_sample, but the canvas is true BGR (H x W x 3)."""
+    preset = get_preset(architecture)
+    opt = replace(params, charging_streak_prob=0.0, charging_streak_intensity=0.0)
+    zone = generate_zone_canvas_rgb(
+        fine_canvas_size_px(opt.scale_ratio), preset["kind"],
+        opt.collapse_threshold_nm, rng,
+        mat_size_nm=opt.mat_size_nm, strip_width_nm=opt.strip_width_nm,
+        linewidth_bias_nm=opt.linewidth_bias_nm,
+        corner_rounding_px=opt.corner_rounding_px,
+    )
+    canvas = zone["canvas"]
+    n = canvas.shape[0]
+    x0, y0 = _pick_crop_origin(zone, opt, rng, n)
+    crop = canvas[y0:y0 + REFERENCE_SIZE_PX, x0:x0 + REFERENCE_SIZE_PX]
+
+    reference_img = image_reference(
+        crop, PIXEL_SIZE_REF_NM, opt.beam_spot_size_nm, opt.dose_reference, rng,
+        detector_noise_sigma=opt.detector_noise_sigma_ref,
+        drift_jitter_px=opt.drift_jitter_px * 0.2,
+        astigmatism_ratio=opt.astigmatism_ratio,
+        vignette_strength=max(opt.vignette_strength, 0.12),
+        gamma=opt.gamma,
+        barrel_distortion_k=opt.barrel_distortion_k * 0.3,
+        charging_streak_prob=0.0,
+        charging_streak_intensity=0.0,
+        speckle_sigma=opt.speckle_sigma,
+        salt_pepper_prob=opt.salt_pepper_prob,
+    )
+    search_img = image_search(
+        canvas, PIXEL_SIZE_REF_NM, n / float(SEARCH_SIZE_PX), opt.beam_spot_size_nm,
+        opt.dose_search, rng,
+        shear_amplitude_px=opt.shear_amplitude_px,
+        drift_jitter_px=opt.drift_jitter_px,
+        detector_noise_sigma=opt.detector_noise_sigma_search,
+        astigmatism_ratio=opt.astigmatism_ratio,
+        vignette_strength=max(opt.vignette_strength, 0.18),
+        gamma=opt.gamma,
+        barrel_distortion_k=opt.barrel_distortion_k,
+        charging_streak_prob=0.0,
+        charging_streak_intensity=0.0,
+        speckle_sigma=opt.speckle_sigma,
+        salt_pepper_prob=opt.salt_pepper_prob,
+        search_size_px=SEARCH_SIZE_PX,
+    )
+    reference_img = add_optical_channel_noise(reference_img, rng, (3.0, 2.5, 3.5))
+    search_img = add_optical_channel_noise(search_img, rng, (6.0, 5.0, 7.0))
+    scale = n / float(SEARCH_SIZE_PX)
+    box = REFERENCE_SIZE_PX / scale
+    cx, cy = x0 / scale + box / 2.0, y0 / scale + box / 2.0
+    search_img, cx, cy = rotate_about_center(search_img, opt.rotation_deg, cx, cy)
+    realized = replace(opt, scale_ratio=scale)
+    return {
+        "reference_img": reference_img, "search_img": search_img,
+        "gt_x": cx, "gt_y": cy, "gt_box": (cx - box / 2.0, cy - box / 2.0, box, box),
+        "architecture": architecture, "params": realized.as_dict(),
+    }
+
+
 # =============================================================================
 # Noise curriculum (the recipe used for the submitted matcher)
 # =============================================================================
@@ -632,6 +814,8 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-randomize-noise", action="store_true",
                    help="Disable the default noise mix; use fixed CLI params.")
+    p.add_argument("--optical", action="store_true",
+                   help="Write real 3-channel optical RGB PNGs (does not change gray SEM).")
     return p.parse_args()
 
 
@@ -640,8 +824,11 @@ def main():
     rng = np.random.default_rng(args.seed)
     params = GenerationParams()
     use_mix = not args.no_randomize_noise
+    output_dir = args.output_dir
+    if args.optical and os.path.normpath(output_dir) in (".", "./dataset", "dataset"):
+        output_dir = "./dataset_optical"
 
-    split_dir = os.path.join(args.output_dir, args.split)
+    split_dir = os.path.join(output_dir, args.split)
     ref_dir = os.path.join(split_dir, "reference")
     search_dir = os.path.join(split_dir, "search")
     os.makedirs(ref_dir, exist_ok=True)
@@ -659,10 +846,13 @@ def main():
         "speckle_sigma", "salt_pepper_prob",
         "linewidth_bias_nm", "corner_rounding_px",
         "mat_size_nm", "strip_width_nm", "boundary_bias",
-        "scale_ratio", "rotation_deg", "seed",
+        "scale_ratio", "rotation_deg", "seed", "modality",
     ]
-    print(f"generating {args.num_samples} pairs  noise_mix={'ON' if use_mix else 'OFF'}  "
+    mode = "optical-RGB" if args.optical else "SEM-gray"
+    print(f"generating {args.num_samples} pairs  mode={mode}  noise_mix={'ON' if use_mix else 'OFF'}  "
           f"arch={args.architectures}  seed={args.seed}")
+
+    make_sample = generate_sample_optical if args.optical else generate_sample
 
     with open(os.path.join(split_dir, "manifest.csv"), "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -675,7 +865,7 @@ def main():
             else:
                 bucket = "fixed"
                 pair_params = params
-            sample = generate_sample(architecture, rng, pair_params)
+            sample = make_sample(architecture, rng, pair_params)
             ref_path = os.path.join(ref_dir, f"{i:05d}.png")
             search_path = os.path.join(search_dir, f"{i:05d}.png")
             cv2.imwrite(ref_path, sample["reference_img"])
@@ -687,6 +877,7 @@ def main():
                 "gt_box_x": gx0, "gt_box_y": gy0, "gt_box_w": gw, "gt_box_h": gh,
                 "architecture": architecture, "noise_bucket": bucket,
                 **sample["params"], "seed": args.seed,
+                "modality": "optical" if args.optical else "sem",
             })
             print(
                 f"[{i + 1}/{args.num_samples}] {bucket:14s} {architecture:12s} "
