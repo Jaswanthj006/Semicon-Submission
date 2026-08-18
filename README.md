@@ -141,30 +141,46 @@ Weights ship in `model/verifier.pt` — no training needed.
 
 ## Test on Your Dataset
 
-**One pair (judges):**
+Inference never retrains. Weights: `model/verifier.pt`.
+
+**One pair** (prints `x y`, origin top-left of the search image):
 
 ```bash
 python localize.py --reference /path/to/REF.png --search /path/to/SEARCH.png
 ```
 
-Prints one line: `x y`
+**Folder of pairs** (`reference/` + `search/` with matching filenames). Same `predict()` on every pair. Prints:
 
-**Folder of pairs** (`reference/` + `search/` with matching filenames):
+`sample_id,pred_x,pred_y,confidence,inference_time_ms`
 
 ```bash
-python localize.py --data /path/to/split
+python localize.py --data "C:\path\to\split"
 ```
 
-Prints one line per pair: `filename x y`. Each pair still goes through the same one-pair matcher. Weights are loaded once.
+**CSV list** (when organizers share paths + sample ids). Extra columns are ignored. Needs a reference path column and a search path column (`reference_path` / `search_path`, or similar):
 
-**Smoke test on shipped pair:**
+```bash
+python localize.py --pairs-csv list.csv --output predictions.csv
+```
+
+Optional `--output predictions.csv` also writes that file for folder or CSV batch.
+
+Python API (no CLI):
+
+```python
+from localize import predict
+predict("REF.png", "SEARCH.png")
+# {'sample_id', 'pred_x', 'pred_y', 'confidence', 'inference_time_ms'}
+```
+
+**Smoke test:**
 
 ```bash
 python localize.py --reference dataset/reference/00000.png --search dataset/search/00000.png
-
+# Expected: ~844.38 285.63  (GT: 844.6, 285.6)
 ```
 
-RGB optical PNGs work with the same command — loaded as grayscale internally.
+RGB optical PNGs work with the same commands — loaded as grayscale internally.
 
 ---
 
