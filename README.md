@@ -118,7 +118,7 @@ Weights ship in `model/verifier.pt` — no training needed.
 
 ## Test on Your Dataset
 
-**One pair:**
+**One pair (judges):**
 
 ```bash
 python localize.py --reference /path/to/REF.png --search /path/to/SEARCH.png
@@ -126,19 +126,13 @@ python localize.py --reference /path/to/REF.png --search /path/to/SEARCH.png
 
 Prints one line: `x y`
 
-**Batch (bash):**
+**Folder of pairs** (`reference/` + `search/` with matching filenames):
 
 ```bash
-for f in reference/*.png; do
-  python localize.py --reference "$f" --search "search/$(basename "$f")"
-done
+python localize.py --data /path/to/split
 ```
 
-**Batch (Windows):**
-
-```bat
-for %f in (reference\*.png) do python localize.py --reference "%f" --search "search\%~nxf"
-```
+Prints one line per pair: `filename x y`. Each pair still goes through the same one-pair matcher. Weights are loaded once.
 
 **Smoke test on shipped pair:**
 
