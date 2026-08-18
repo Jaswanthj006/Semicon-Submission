@@ -157,7 +157,7 @@ python localize.py --reference /path/to/REF.png --search /path/to/SEARCH.png
 python localize.py --data "C:\path\to\split"
 ```
 
-**CSV list** (when organizers share paths + sample ids). Extra columns are ignored. Needs a reference path column and a search path column (`reference_path` / `search_path`, or similar):
+**CSV list** . Extra columns are ignored. Needs a reference path column and a search path column (`reference_path` / `search_path`):
 
 ```bash
 python localize.py --pairs-csv list.csv --output predictions.csv
@@ -177,7 +177,6 @@ predict("REF.png", "SEARCH.png")
 
 ```bash
 python localize.py --reference dataset/reference/00000.png --search dataset/search/00000.png
-# Expected: ~844.38 285.63  (GT: 844.6, 285.6)
 ```
 
 RGB optical PNGs work with the same commands — loaded as grayscale internally.
