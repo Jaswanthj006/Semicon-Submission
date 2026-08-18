@@ -2,7 +2,7 @@
 
 > Given a 100× / 1 nm/px reference patch (1000×1000) and a 10× / ~10 nm/px search image (1000×1000), output the center `(x, y)` of the reference inside the search image. Tie-break: closest to `(500, 500)`.
 
-Applied Materials Track 2 · SEMICON India 2026
+
 
 ---
 
